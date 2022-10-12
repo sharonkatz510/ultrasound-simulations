@@ -13,11 +13,12 @@ classdef kwave_linear_array_in_medium
         W_element = 0.5e-3;                 % [m]
     end
     methods
-        function obj = kwave_linear_array_in_medium(f0, varargin)
+        function obj = kwave_linear_array_in_medium(f0, focus, varargin)
             % Constructor for kwave_linear_array_in_medium simulation
             % object
             % Inputs:
             %   - f0 = Transmission frequency [Hz]
+            %   - focus = [depth, y] coordinates of the focus [m]
             % Optional inputs:
             %   - n_cycles
             %   - total_transducer_width [m]
@@ -31,7 +32,8 @@ classdef kwave_linear_array_in_medium
             %           [dB/(MHz*cm)]
             %       alpha_power (power law absorption exponent)
             addpath(genpath('C:\Program Files\Polyspace\R2021a\toolbox\k-Wave'));
-
+            
+            % Check inputs
             P = inputParser();
             P.addParameter('n_cycles',2,...
                 @(x) isa(x,'double') && sum(size(x) == [1,1])==2);
@@ -39,7 +41,9 @@ classdef kwave_linear_array_in_medium
             P.addParameter('grid',[],@(x) isa(x, 'kWaveGrid'));
             P.addParameter('medium',[],@(x) isstruct(x));
             P.parse(varargin{:});
-            
+            assert((length(focus)==2) && (size(focus,1)*size(focus,2)==2)...
+                && isnumeric(focus),...
+                'Expected focus to be a numeric 1x2 vetor');
             n_cycles = P.Results.n_cycles;
             obj.total_transducer_width = P.Results.total_transducer_width;
             obj.f0 = f0;
@@ -57,11 +61,11 @@ classdef kwave_linear_array_in_medium
             PML_Z_SIZE = 10;            % [grid points]
 
             % set desired grid size in the x-direction not including the PML
-            x = 50e-3;                  % axial axis length [m]
-            y = 4e-2;                   % lateral axis width [m]
+            x = 1.25*focus(1);                  % axial axis length [m]
+            y = 1.25*(obj.total_transducer_width + focus(2));                   % lateral axis width [m]
             
             % calculate the spacing between the grid points
-            dx = min([(obj.c)/(10e6),... % set to comply with Nyquist theorem [m]
+            dx = min([(obj.c)/(2*f0),... % set to comply with Nyquist theorem for 5 MHz[m]
                 obj.W_element]);        % make sure not to exceed the size of trnsducer elemetns         
             dy = dx;                    % [m]
             dz = dx;                    % [m]
@@ -107,25 +111,7 @@ classdef kwave_linear_array_in_medium
                 obj.medium.alpha_power = 1.5;
                 obj.medium.BonA = 6;
             end
-            % create the time array
-            t_end = 40e-6;                  % [s]
-            obj.kgrid.makeTime(obj.medium.sound_speed, [], t_end);
-
-            % =========================================================================
-            % DEFINE THE INPUT SIGNAL
-            % =========================================================================
-
-            % define properties of the input signal
-            source_strength = 10e6;          % [Pa]
-
-            % create the input signal using toneBurst 
-            input_signal = toneBurst(1/obj.kgrid.dt, f0, n_cycles);
-
-            % scale the source magnitude by the source_strength divided by the
-            % impedance (the source is assigned to the particle velocity)
-            input_signal = (source_strength ./...
-                (obj.medium.sound_speed * obj.medium.density)) .* input_signal;
-
+            
             % =========================================================================
             % DEFINE THE ULTRASOUND TRANSDUCER
             % =========================================================================
@@ -149,9 +135,9 @@ classdef kwave_linear_array_in_medium
 
             % properties used to derive the beamforming delays
             transducer.sound_speed = 1540;                  % sound speed [m/s]
-            transducer.focus_distance = 40e-3;              % focus distance [m]
-            transducer.elevation_focus_distance = transducer.position(2)*dx;    % focus distance in the elevation plane [m]
-            transducer.steering_angle = 0;                  % steering angle [degrees]
+            transducer.focus_distance = focus(1);              % focus distance [m]
+            transducer.elevation_focus_distance = transducer.position(3)*dz;    % focus distance in the elevation plane [m]
+            transducer.steering_angle = rad2deg(atan(focus(2)/focus(1)));                  % steering angle [degrees]
 
             % apodization
             transducer.transmit_apodization = 'Rectangular';    
@@ -159,6 +145,27 @@ classdef kwave_linear_array_in_medium
 
             % define the transducer elements that are currently active
             transducer.active_elements = ones(transducer.number_elements, 1);
+            
+            % =========================================================================
+            % DEFINE THE INPUT SIGNAL
+            % =========================================================================
+            % create the time array
+            t_end = (1.5*x/...
+                (cos(deg2rad(transducer.steering_angle))*obj.medium.sound_speed))...
+                + (n_cycles/f0);                  % [s]
+            obj.kgrid.makeTime(obj.medium.sound_speed, [], t_end);
+            
+            % define properties of the input signal
+            source_strength = 10e6;          % [Pa]
+
+            % create the input signal using toneBurst 
+            input_signal = toneBurst(1/obj.kgrid.dt, f0, n_cycles);
+
+            % scale the source magnitude by the source_strength divided by the
+            % impedance (the source is assigned to the particle velocity)
+            input_signal = (source_strength ./...
+                (obj.medium.sound_speed * obj.medium.density)) .* input_signal;
+
 
             % append input signal used to drive the transducer
             transducer.input_signal = input_signal;
